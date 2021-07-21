@@ -4,7 +4,9 @@ workflows.py
 Defines EDI processing workflows.
 """
 
+import asyncio
 import xworkflows
+from httpx import AsyncClient
 from xworkflows import transition
 from typing import Any, List, Optional
 
@@ -34,6 +36,7 @@ class EdiWorkflow(xworkflows.Workflow):
         <li>enrich - Enriches the input message with additional data using custom transformations.</li>
         <li>validate - Validates the input message.</li>
         <li>translate- Translates the input message in a supported format to a different supported format. Example: translate HL7v2 to FHIR.</li>
+        <li>transmit - Transmits the message to a URL for use by another service.</li>
         <li>complete - Marks the EDI workflow as complete, returning an EDI result.</li>
         <li>cancel - Cancels the current workflow process, returning an EDI result.</li>
         <li>fail - Reached if the workflow encounters an unrecoverable error. Returns an EDI result.</li>
@@ -46,6 +49,7 @@ class EdiWorkflow(xworkflows.Workflow):
         ("enriched", "Enrich Message"),
         ("validated", "Validate Message"),
         ("translated", "Translate Message"),
+        ("transmitted", "Transmit Message"),
         ("completed", "Complete Processing"),
         ("cancelled", "Cancel Processing"),
         ("failed", "Fail Processing"),
@@ -56,13 +60,14 @@ class EdiWorkflow(xworkflows.Workflow):
         ("enrich", "analyzed", "enriched"),
         ("validate", ("analyzed", "enriched"), "validated"),
         ("translate", ("analyzed", "enriched", "validated"), "translated"),
-        ("complete", ("analyzed", "enriched", "validated", "translated"), "completed"),
+        ("transmit", ("analyzed", "enriched", "validated", "translated"), "transmitted"),
+        ("complete", ("analyzed", "enriched", "validated", "translated", "transmitted"), "completed"),
         (
             "cancel",
-            ("init", "analyzed", "enriched", "validated", "translated"),
+            ("init", "analyzed", "enriched", "validated", "translated", "transmitted"),
             "cancelled",
         ),
-        ("fail", ("init", "analyzed", "enriched", "validated", "translated"), "failed"),
+        ("fail", ("init", "analyzed", "enriched", "validated", "translated", "transmitted"), "failed"),
     )
 
     initial_state = "init"
@@ -79,6 +84,7 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
         EdiOperations.ENRICH,
         EdiOperations.VALIDATE,
         EdiOperations.TRANSLATE,
+        EdiOperations.TRANSMIT,
     ]
 
     def __init__(self, input_message: Any):
@@ -94,9 +100,13 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
         self.input_message = input_message
         self.meta_data: Optional[EdiMessageMetadata] = None
         self.metrics: EdiProcessingMetrics = EdiProcessingMetrics(
-            analyzeTime=0.0, enrichTime=0.0, validateTime=0.0, translateTime=0.0
+            analyzeTime=0.0, enrichTime=0.0, validateTime=0.0, translateTime=0.0, transmitTime=0.0
         )
         self.operations: Optional[EdiOperations] = []
+        self.transmit_data = None
+        self.transmit_result = None
+        self.transmit_status_code = None
+        self.message_received = False
 
     @transition("analyze")
     def analyze(self):
@@ -138,7 +148,7 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
         self.operations.append(EdiOperations.VALIDATE)
 
     @transition("translate")
-    def translate(self):
+    async def translate(self):
         """
         Translates the input message to a different, supported format.
         """
@@ -148,6 +158,29 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
         elapsed_time = end - start
         self.metrics.translateTime = elapsed_time
         self.operations.append(EdiOperations.TRANSLATE)
+
+    @transition("transmit")
+    async def transmit(self):
+        """
+        Transmits the input message to LinuxForHealthConnect.
+        """
+        start = perf_counter_ms()
+        resource = self.transmit_data
+
+        try:
+            async with AsyncClient(verify=False) as client:
+                result = await client.post("https://localhost:5000/fhir/CoverageEligibilityRequest", json=resource)
+        except:
+            raise
+
+        self.transmit_result = result.text
+        self.transmit_status_code = result.status_code
+        print(f'Transmit result: {result.text} Status code: {result.status_code}')
+
+        end = perf_counter_ms()
+        elapsed_time = end - start
+        self.metrics.transmitTime = elapsed_time
+        self.operations.append(EdiOperations.TRANSMIT)
 
     def _create_edi_result(self) -> EdiResult:
         """
@@ -198,7 +231,7 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
             edi_result.errors.append({"msg": str(exception)})
         return edi_result
 
-    def run(self, enrich=True, validate=True, translate=True):
+    async def run(self, enrich=True, validate=True, translate=True, transmit=True):
         """
         Convenience method used to run a workflow process.
         By default the workflow process includes: analyze, enrich, validate, and translate, and is marked as completed.
@@ -218,7 +251,14 @@ class EdiProcessor(xworkflows.WorkflowEnabled):
                 self.validate()
 
             if translate:
-                self.translate()
+                await self.translate()
+
+            if transmit:
+                await self.transmit()
+
+            while not self.message_received:
+                print("Waiting for NATS message...")
+                await asyncio.sleep(2)
 
             return self.complete()
         except Exception as ex:

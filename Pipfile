@@ -13,6 +13,12 @@ pyaml = "*"
 lxml = "*"
 xworkflows = "*"
 pydantic = "*"
+httpx = "*"
+asyncio-nats-client = "*"
+asyncio = "*"
+nkeys = "*"
+x12 = {editable = true, git = "https://github.com/LinuxForHealth/x12.git"}
+python-dotenv = "*"
 
 [dev-packages]
 pytest = "*"
