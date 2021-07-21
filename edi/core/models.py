@@ -37,6 +37,7 @@ class EdiOperations(str, Enum):
     ENRICH = "ENRICH"
     VALIDATE = "VALIDATE"
     TRANSLATE = "TRANSLATE"
+    TRANSMIT = "TRANSMIT"
     COMPLETE = "COMPLETE"
     CANCEL = "CANCEL"
     FAIL = "FAIL"
@@ -78,12 +79,13 @@ class EdiProcessingMetrics(BaseModel):
     enrichTime: float = 0.0
     validateTime: float = 0.0
     translateTime: float = 0.0
+    transmitTime: float = 0.0
     totalTime: float = 0.0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.totalTime = (
-            self.analyzeTime + self.enrichTime + self.validateTime + self.translateTime
+            self.analyzeTime + self.enrichTime + self.validateTime + self.translateTime + self.transmitTime
         )
 
     class Config:
@@ -92,6 +94,7 @@ class EdiProcessingMetrics(BaseModel):
                 "analyzeTime": 0.142347273,
                 "enrichTime": 0.013415911,
                 "validationTime": 0.013415911,
+                "transmitTime": 0.013415911,
                 "translateTime": 2.625179046,
                 "totalTime": 2.794358141,
             }
@@ -125,6 +128,7 @@ class EdiResult(BaseModel):
                     "enrichTime": 0.0,
                     "validationTime": 0.013415911,
                     "translateTime": 2.625179046,
+                    "transmitTime": 2.625179046,
                 },
                 "inputMessage": "EDI Message",
                 "operations": [
@@ -132,6 +136,7 @@ class EdiResult(BaseModel):
                     "ENRICH",
                     "VALIDATE",
                     "TRANSLATE",
+                    "TRANSMIT",
                     "COMPLETE",
                 ],
                 "errors": [],
